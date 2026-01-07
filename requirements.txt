@@ -1,0 +1,8 @@
+flask
+flask-socketio
+python-dotenv
+python-telegram-bot==20.5
+geopy
+requests
+eventlet
+firebase-admin

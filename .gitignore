@@ -1,0 +1,26 @@
+# Entornos virtuales
+venv/
+.env/
+*.env
+
+# Archivos del sistema
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Configuraciones locales
+.DS_Store
+Thumbs.db
+
+# Archivos temporales
+*.log
+*.sqlite3
+*.db
+
+# Archivos de entorno o llaves
+firebase_credentials.json
+serviceAccountKey.json
+
+# Carpeta de pruebas locales
+test/

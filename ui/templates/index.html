@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Mapa de Incidentes - Comisaría</title>
+    <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+    <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet">
+    <style>
+        body { margin:0; padding:0; font-family: Arial, sans-serif; }
+        #map { position:absolute; top:0; bottom:0; width:100%; }
+        #panel {
+            position: absolute; right: 10px; top: 10px; 
+            width: 340px; max-height: 90vh;
+            background: rgba(255,255,255,0.95); 
+            border-radius: 8px; 
+            overflow: auto; 
+            padding: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+        .incident { 
+            border-bottom: 1px solid #eee; 
+            padding: 8px 4px; 
+            cursor: pointer;
+            margin-bottom: 4px;
+        }
+        .incident:hover { background: #f8f9fa; }
+        .status-open { color: #d9534f; font-weight: 600; }
+        .status-resolved { color: #5cb85c; font-weight: 600; }
+        .marker {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: 3px solid white;
+            box-shadow: 0 0 4px rgba(0,0,0,0.5);
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div id="panel">
+        <h3>Incidentes Recientes</h3>
+        <div id="list"></div>
+        <div style="margin-top:10px">
+            <a href="/admin?token={{ ADMIN_TOKEN }}" target="_blank">Panel de Administración</a>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
+    <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+    <script>
+        const initialIncidents = JSON.parse(`{{ INCIDENTS_JSON | safe }}`);
+        const ADMIN_TOKEN = "{{ ADMIN_TOKEN }}";
+        mapboxgl.accessToken = "{{ MAPBOX_TOKEN }}";
+        const map = new mapboxgl.Map({
+            container: 'map',
+            style: 'mapbox://styles/mapbox/streets-v12',
+            center: [-77.0428, -12.0464],
+            zoom: 12
+        });
+        function debugIncidents() {
+            console.log('=== DEBUG INCIDENTES ===');
+            console.log('Total de incidentes:', Array.isArray(initialIncidents) ? initialIncidents.length : 0);
+        }
+        map.on('load', () => {
+            debugIncidents();
+            if (Array.isArray(initialIncidents)) initialIncidents.forEach(addOrUpdateIncident);
+        });
+        const socket = io();
+        const markers = new Map();
+        function escapeHtml(text) {
+            return (text || '').replace(/[&<>"']/g, m => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;',
+                '"': '&quot;', "'": '&#39;'
+            })[m]);
+        }
+      function popupHtml(incident) {
+    return `
+        <div style="min-width:220px">
+            <strong>ID: ${incident.id}</strong><br/>
+            <div><b>${escapeHtml(incident.category || 'Sin categoría')}</b></div>
+            <div style="margin-top:6px">${escapeHtml(incident.message || '')}</div>
+            <div style="margin-top:6px"><small>${escapeHtml(incident.address || '')}</small></div>
+            <hr>
+            <div><b>👤 ${escapeHtml(incident.reporter_name || incident.username || 'No registrado')}</b></div>
+            <div><b>📞 ${escapeHtml(incident.reporter_phone || 'No disponible')}</b></div>
+            <div><b>🪪 DNI:</b> ${escapeHtml(incident.reporter_dni || '---')}</div>
+            <div style="margin-top:6px"><span class="status-${incident.status}">${incident.status.toUpperCase()}</span></div>
+        </div>
+    `;
+}
+
+        function addOrUpdateIncident(incident) {
+            if (!incident || !incident.id) return;
+            const id = incident.id;
+            const existing = markers.get(id);
+            if (incident.lat && incident.lon) {
+                const coords = [parseFloat(incident.lon), parseFloat(incident.lat)];
+                if (existing) {
+                    existing.setLngLat(coords);
+                    const el = existing.getElement();
+                    if (el) el.style.backgroundColor = incident.status === 'resolved' ? '#2ecc71' : '#e74c3c';
+                    existing.getPopup().setHTML(popupHtml(incident));
+                } else {
+                    const el = document.createElement('div');
+                    el.className = 'marker';
+                    el.style.backgroundColor = incident.status === 'resolved' ? '#2ecc71' : '#e74c3c';
+                    const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(popupHtml(incident));
+                    const marker = new mapboxgl.Marker(el).setLngLat(coords).setPopup(popup).addTo(map);
+                    markers.set(id, marker);
+                }
+            }
+            renderListItem(incident);
+        }
+        function renderListItem(incident) {
+            const list = document.getElementById('list');
+            const id = incident.id;
+            let el = document.getElementById('inc-' + id);
+            const html = `
+                <div id="inc-${id}" class="incident">
+                    <div><strong>ID ${id}</strong> - <span class="status-${incident.status}">${incident.status}</span></div>
+                    <div>${escapeHtml(incident.message || '')}</div>
+                    <div style="font-size:11px;color:#666">${escapeHtml(incident.address || '')}</div>
+                    <div style="font-size:10px;color:#888">(Click para ubicar en mapa)</div>
+                </div>
+            `;
+            if (el) el.outerHTML = html;
+            else list.insertAdjacentHTML('afterbegin', html);
+            el = document.getElementById('inc-' + id);
+            if (el && incident.address) {
+                el.onclick = () => {
+                    const address = incident.address;
+                    fetch(`/geocode?q=${encodeURIComponent(address)}`)
+                        .then(r => r.json())
+                        .then(data => {
+                            if (data && data.lat && data.lon) {
+                                const coords = [data.lon, data.lat];
+                                let marker = markers.get(id);
+                                if (!marker) {
+                                    const el = document.createElement('div');
+                                    el.className = 'marker';
+                                    el.style.backgroundColor = incident.status === 'resolved' ? '#2ecc71' : '#e74c3c';
+                                    const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(popupHtml(incident));
+                                    marker = new mapboxgl.Marker(el).setLngLat(coords).setPopup(popup).addTo(map);
+                                    markers.set(id, marker);
+                                } else marker.setLngLat(coords);
+                                map.flyTo({ center: coords, zoom: 16, essential: true });
+                                setTimeout(() => { if (marker) marker.togglePopup(); }, 1200);
+                            } else alert('No se pudo encontrar la ubicación de: ' + address);
+                        })
+                        .catch(err => alert('Error al buscar la ubicación'));
+                };
+            }
+        }
+    </script>
+</body>
+</html>
